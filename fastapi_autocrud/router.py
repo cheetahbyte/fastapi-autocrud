@@ -12,7 +12,7 @@ def generate_crud_router(
     create_model: Optional[CreateModelType] = None,
     update_model: Optional[UpdateModelType] = None,
     storage: StorageBackend = None,
-    dependencies: dict[str, list] = None,
+    dependencies: dict[str, List[Depends]] = None,
 ) -> APIRouter:
     create_model = create_model or create_create_model(output_model)
     update_model = update_model or create_update_model(output_model)
@@ -20,8 +20,8 @@ def generate_crud_router(
 
     router = APIRouter()
 
-    def extract_dependencies(deps: list):
-        return [dep.dependency for dep in deps if isinstance(dep, Depends)]
+    def extract_dependencies(deps: list[Depends]):
+        return [dep.depdency for dep in deps]
 
     async def resolve_dependencies(deps: list):
         results = await asyncio.gather(*[dep() for dep in deps])
