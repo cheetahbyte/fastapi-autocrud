@@ -28,31 +28,44 @@ def create_endpoint(storage_func, route_dependencies):
     """
     A factory to create a FastAPI endpoint with dynamic dependencies in its signature.
     """
+
+    # 1. Define the generic endpoint function.
     async def endpoint(**kwargs):
-        path_params = {
-            p.name: kwargs.pop(p.name)
-            for p in sig.parameters.values()
-            if p.kind == p.POSITIONAL_OR_KEYWORD and p.name in kwargs
-        }
-        return await storage_func(**path_params, **kwargs)
+        # This function simply passes all resolved arguments (path params and
+        # dependencies) from FastAPI directly to your storage method.
+        return await storage_func(**kwargs)
 
+    # 2. Get the base signature from the storage function or its wrapper.
     storage_sig = inspect.signature(storage_func)
-    params = [p for p in storage_sig.parameters.values() if p.name not in ['self', 'obj', 'kwargs']]
+    params = list(storage_sig.parameters.values())
 
+    # 3. Add the dependencies to the signature's parameters.
     for dep in route_dependencies:
         dep_func = dep.dependency
         param_name = dep_func.__name__
+
+        # ========================== THE FIX IS HERE ==========================
+        # We create the parameter but explicitly set its annotation to empty.
+        # This prevents the ORM model type hint (e.g., '-> User') from being
+        # part of the function signature that FastAPI analyzes.
+        # FastAPI only needs the `default=Depends(...)` part to work correctly.
         params.append(
             inspect.Parameter(
                 name=param_name,
                 kind=inspect.Parameter.KEYWORD_ONLY,
                 default=dep,
-                annotation=inspect.Parameter.empty
+                annotation=inspect.Parameter.empty  # This line solves the error
             )
         )
+        # =====================================================================
 
+    # 4. Create the new signature from our combined list of parameters.
     sig = inspect.Signature(params)
+
+    # 5. Apply the new signature to our endpoint function.
     endpoint.__signature__ = sig
+
+    # Give the function a name for better debugging.
     endpoint.__name__ = storage_func.__name__
 
     return endpoint
