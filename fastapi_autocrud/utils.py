@@ -1,6 +1,6 @@
 from pydantic import BaseModel, create_model
 from typing import Optional, Any, Dict
-
+import inspect
 
 def create_create_model(base: type[BaseModel]) -> type[BaseModel]:
     fields: Dict[str, tuple[Any, Any]] = {}
@@ -20,52 +20,52 @@ def create_update_model(base: type[BaseModel]) -> type[BaseModel]:
     return create_model(f"{base.__name__}Update", **fields)
 
 
-import inspect
-from functools import wraps
-
-
 def create_endpoint(storage_func, route_dependencies):
     """
-    A factory to create a FastAPI endpoint with dynamic dependencies in its signature.
+    A factory to create a FastAPI endpoint with dynamic dependencies,
+    stripping all non-Pydantic type hints from the final signature.
     """
 
-    # 1. Define the generic endpoint function.
     async def endpoint(**kwargs):
-        # This function simply passes all resolved arguments (path params and
-        # dependencies) from FastAPI directly to your storage method.
         return await storage_func(**kwargs)
 
-    # 2. Get the base signature from the storage function or its wrapper.
     storage_sig = inspect.signature(storage_func)
-    params = list(storage_sig.parameters.values())
 
-    # 3. Add the dependencies to the signature's parameters.
-    for dep in route_dependencies:
-        dep_func = dep.dependency
-        param_name = dep_func.__name__
+    # === START: The Final Fix ===
+    # We will rebuild ALL parameters to ensure their annotations are stripped.
+    final_params = []
 
-        # ========================== THE FIX IS HERE ==========================
-        # We create the parameter but explicitly set its annotation to empty.
-        # This prevents the ORM model type hint (e.g., '-> User') from being
-        # part of the function signature that FastAPI analyzes.
-        # FastAPI only needs the `default=Depends(...)` part to work correctly.
-        params.append(
+    # 1. Process base parameters from the original storage function (like 'user').
+    for param in storage_sig.parameters.values():
+        # Ignore 'self', 'kwargs', etc.
+        if param.name in ['self', 'obj', 'kwargs']:
+            continue
+
+        # Rebuild the parameter, but explicitly set annotation to empty.
+        # This strips problematic hints like 'user: User'.
+        final_params.append(
             inspect.Parameter(
-                name=param_name,
-                kind=inspect.Parameter.KEYWORD_ONLY,
-                default=dep,
-                annotation=inspect.Parameter.empty  # This line solves the error
+                name=param.name,
+                kind=param.kind,
+                default=param.default,
+                annotation=inspect.Parameter.empty
             )
         )
-        # =====================================================================
 
-    # 4. Create the new signature from our combined list of parameters.
-    sig = inspect.Signature(params)
+    # 2. Process dependency parameters (like 'get_current_user').
+    for dep in route_dependencies:
+        final_params.append(
+            inspect.Parameter(
+                name=dep.dependency.__name__,
+                kind=inspect.Parameter.KEYWORD_ONLY,
+                default=dep,
+                annotation=inspect.Parameter.empty
+            )
+        )
+    # === END: The Final Fix ===
 
-    # 5. Apply the new signature to our endpoint function.
-    endpoint.__signature__ = sig
-
-    # Give the function a name for better debugging.
+    # 3. Create and apply the fully sanitized signature.
+    endpoint.__signature__ = inspect.Signature(final_params)
     endpoint.__name__ = storage_func.__name__
 
     return endpoint

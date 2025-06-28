@@ -5,7 +5,6 @@ from uuid import UUID
 from .storage.base import StorageBackend
 from .utils import create_create_model, create_update_model, create_endpoint
 from .types import BaseModelType, CreateModelType, UpdateModelType
-import asyncio
 
 
 def generate_crud_router(
