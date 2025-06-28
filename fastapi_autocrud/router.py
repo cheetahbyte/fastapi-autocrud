@@ -3,16 +3,17 @@ from typing import Type, Optional, List
 from uuid import UUID
 
 from .storage.base import StorageBackend
-from .utils import create_create_model, create_update_model
+from .utils import create_create_model, create_update_model, create_endpoint
 from .types import BaseModelType, CreateModelType, UpdateModelType
 import asyncio
 
+
 def generate_crud_router(
-    output_model: Type[BaseModelType],
-    create_model: Optional[CreateModelType] = None,
-    update_model: Optional[UpdateModelType] = None,
-    storage: StorageBackend = None,
-    dependencies: dict[str, List[Depends]] = None,
+        output_model: Type[BaseModelType],
+        create_model: Optional[CreateModelType] = None,
+        update_model: Optional[UpdateModelType] = None,
+        storage: StorageBackend = None,
+        dependencies: dict[str, List[Depends]] = None,
 ) -> APIRouter:
     create_model = create_model or create_create_model(output_model)
     update_model = update_model or create_update_model(output_model)
@@ -20,38 +21,28 @@ def generate_crud_router(
 
     router = APIRouter()
 
-    def extract_dependencies(deps: list[Depends]):
-        return [dep.depdency for dep in deps]
 
-    async def resolve_dependencies(deps: list):
-        results = await asyncio.gather(*[dep() for dep in deps])
-        return results
+    # GET /
+    list_endpoint = create_endpoint(storage.list, dependencies.get("list", []))
+    router.get("/", response_model=List[output_model])(list_endpoint)
 
-    async def call_storage_with_deps(func, *args, route_name=None, **kwargs):
-        deps = extract_dependencies(dependencies.get(route_name, []))
-        values = await resolve_dependencies(deps)
-        dep_names = [d.__name__ for d in deps]
-        return await func(*args, **kwargs, **dict(zip(dep_names, values)))
+    # POST /
+    async def create_item_endpoint(item: create_model = Body(...), **kwargs):
+        return await storage.create(item, **kwargs)
 
-    # Routes
-    @router.get("/", response_model=List[output_model])
-    async def list_items():
-        return await call_storage_with_deps(storage.list, route_name="list")
+    create_endpoint_with_deps = create_endpoint(create_item_endpoint, dependencies.get("create", []))
+    router.post("/", response_model=output_model)(create_endpoint_with_deps)
 
-    @router.post("/", response_model=output_model)
-    async def create_item(item: create_model = Body(...)):
-        return await call_storage_with_deps(storage.create, item, route_name="create")
+    get_endpoint = create_endpoint(storage.get, dependencies.get("get", []))
+    router.get("/{item_id}", response_model=output_model)(get_endpoint)
 
-    @router.get("/{item_id}", response_model=output_model)
-    async def get_item(item_id: UUID):
-        return await call_storage_with_deps(storage.get, item_id, route_name="get")
+    async def update_item_endpoint(item_id: UUID, item: update_model = Body(...), **kwargs):
+        return await storage.update(item_id, item, **kwargs)
 
-    @router.put("/{item_id}", response_model=output_model)
-    async def update_item(item_id: UUID, item: update_model = Body(...)):
-        return await call_storage_with_deps(storage.update, item_id, item, route_name="update")
+    update_endpoint_with_deps = create_endpoint(update_item_endpoint, dependencies.get("update", []))
+    router.put("/{item_id}", response_model=output_model)(update_endpoint_with_deps)
 
-    @router.delete("/{item_id}")
-    async def delete_item(item_id: UUID):
-        return await call_storage_with_deps(storage.delete, item_id, route_name="delete")
+    delete_endpoint = create_endpoint(storage.delete, dependencies.get("delete", []))
+    router.delete("/{item_id}")(delete_endpoint)
 
     return router
