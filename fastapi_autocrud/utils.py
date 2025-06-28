@@ -46,7 +46,8 @@ def create_endpoint(storage_func, route_dependencies):
             inspect.Parameter(
                 name=param_name,
                 kind=inspect.Parameter.KEYWORD_ONLY,
-                default=dep
+                default=dep,
+                annotation=inspect.Parameter.empty
             )
         )
 
