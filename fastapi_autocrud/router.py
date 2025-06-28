@@ -1,48 +1,49 @@
-from fastapi import APIRouter, Depends, Body
-from typing import Type, Optional, List
-from uuid import UUID
-
-from .storage.base import StorageBackend
-from .utils import create_create_model, create_update_model, create_endpoint
-from .types import BaseModelType, CreateModelType, UpdateModelType
-import asyncio
+import inspect
 
 
-def generate_crud_router(
-        output_model: Type[BaseModelType],
-        create_model: Optional[CreateModelType] = None,
-        update_model: Optional[UpdateModelType] = None,
-        storage: StorageBackend = None,
-        dependencies: dict[str, List[Depends]] = None,
-) -> APIRouter:
-    create_model = create_model or create_create_model(output_model)
-    update_model = update_model or create_update_model(output_model)
-    dependencies = dependencies or {}
 
-    router = APIRouter()
+def create_endpoint(storage_func, route_dependencies):
+    """
+    A factory to create a FastAPI endpoint with dynamic dependencies in its signature.
+    """
 
+    # 1. Define the generic endpoint function.
+    async def endpoint(**kwargs):
+        # This function simply passes all resolved arguments (path params and
+        # dependencies) from FastAPI directly to your storage method.
+        return await storage_func(**kwargs)
 
-    # GET /
-    list_endpoint = create_endpoint(storage.list, dependencies.get("list", []))
-    router.get("/", response_model=List[output_model])(list_endpoint)
+    # 2. Get the base signature from the storage function or its wrapper.
+    storage_sig = inspect.signature(storage_func)
+    params = list(storage_sig.parameters.values())
 
-    # POST /
-    async def create_item_endpoint(item: create_model = Body(...), **kwargs):
-        return await storage.create(item, **kwargs)
+    # 3. Add the dependencies to the signature's parameters.
+    for dep in route_dependencies:
+        dep_func = dep.dependency
+        param_name = dep_func.__name__
 
-    create_endpoint_with_deps = create_endpoint(create_item_endpoint, dependencies.get("create", []))
-    router.post("/", response_model=output_model)(create_endpoint_with_deps)
+        # ========================== THE FIX IS HERE ==========================
+        # We create the parameter but explicitly set its annotation to empty.
+        # This prevents the ORM model type hint (e.g., '-> User') from being
+        # part of the function signature that FastAPI analyzes.
+        # FastAPI only needs the `default=Depends(...)` part to work correctly.
+        params.append(
+            inspect.Parameter(
+                name=param_name,
+                kind=inspect.Parameter.KEYWORD_ONLY,
+                default=dep,
+                annotation=inspect.Parameter.empty  # This line solves the error
+            )
+        )
+        # =====================================================================
 
-    get_endpoint = create_endpoint(storage.get, dependencies.get("get", []))
-    router.get("/{item_id}", response_model=output_model)(get_endpoint)
+    # 4. Create the new signature from our combined list of parameters.
+    sig = inspect.Signature(params)
 
-    async def update_item_endpoint(item_id: UUID, item: update_model = Body(...), **kwargs):
-        return await storage.update(item_id, item, **kwargs)
+    # 5. Apply the new signature to our endpoint function.
+    endpoint.__signature__ = sig
 
-    update_endpoint_with_deps = create_endpoint(update_item_endpoint, dependencies.get("update", []))
-    router.put("/{item_id}", response_model=output_model)(update_endpoint_with_deps)
+    # Give the function a name for better debugging.
+    endpoint.__name__ = storage_func.__name__
 
-    delete_endpoint = create_endpoint(storage.delete, dependencies.get("delete", []))
-    router.delete("/{item_id}")(delete_endpoint)
-
-    return router
+    return endpoint
